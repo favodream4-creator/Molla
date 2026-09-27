@@ -374,7 +374,7 @@ export default function Feed() {
               return (
                 <div className="mt-3 overflow-hidden bg-molla-black">
                   <div className="flex snap-x snap-mandatory overflow-x-auto scroll-smooth">
-                    {urls.map((url) => (
+                    {urls.map((url: string) => (
                       <button
                         key={url}
                         onClick={() => openModalForPost(post.id)}
