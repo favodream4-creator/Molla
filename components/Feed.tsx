@@ -456,7 +456,7 @@ export default function Feed() {
 
               {activeMedia.length > 1 && (
                 <div className="mt-3 flex items-center justify-center gap-2">
-                  {activeMedia.map((_: string, index) => (
+                  {activeMedia.map((_: string, index: number) => (
                     <button
                       key={`${activePost.id}-${index}`}
                       onClick={() => setModalIndex(modalIndex)}
