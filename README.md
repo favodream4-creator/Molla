@@ -78,6 +78,10 @@ stocké en `localStorage` via `lib/store.ts` — pratique pour ce prototype, mai
    - `supabase/migration_connect_opportunities.sql` (`collaborators`, `opportunities`, requêtes/candidatures)
    - `supabase/migration_feed.sql` (`profiles`, `posts`, `post_likes`, `post_comments`, et le bucket
      de stockage `post-images` pour les photos)
+   - `supabase/migration_feed_multiple_media.sql` (stockage des carrousels de plusieurs médias)
+   - `supabase/migration_social_controls.sql` (signalement des posts)
+   - `supabase/migration_profile_edit.sql` (création sécurisée de sa propre ligne de profil)
+   - `supabase/migration_profile_details.sql` (avatar, bio, ville, genres et besoins de collaboration)
 4. `npm install` puis `npm run dev`. Tu es redirigé vers `/login` : entre ton email,
    Supabase t'envoie un lien magique, clique dessus pour te connecter.
 

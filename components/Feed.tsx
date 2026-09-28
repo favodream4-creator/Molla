@@ -11,6 +11,7 @@ type Post = {
   media_urls: string[];
   created_at: string;
   author: string;
+  authorAvatar: string | null;
   likeCount: number;
   likedByMe: boolean;
   comments: { id: string; user_id: string; body: string; author: string; created_at: string }[];
@@ -31,9 +32,8 @@ export default function Feed() {
   const [loading, setLoading] = useState(true);
   const [myId, setMyId] = useState<string | null>(null);
   const [text, setText] = useState("");
-  const [mediaFile, setMediaFile] = useState<File | null>(null);
-  const [mediaPreview, setMediaPreview] = useState<string | null>(null);
-  const [mediaType, setMediaType] = useState<string | null>(null);
+  const [mediaFiles, setMediaFiles] = useState<File[]>([]);
+  const [mediaPreviews, setMediaPreviews] = useState<{ file: File; url: string }[]>([]);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [posting, setPosting] = useState(false);
@@ -41,6 +41,11 @@ export default function Feed() {
   const [modalIndex, setModalIndex] = useState(0);
   const [openComments, setOpenComments] = useState<Set<string>>(new Set());
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
+  const [reportPostId, setReportPostId] = useState<string | null>(null);
+  const [reportReason, setReportReason] = useState("spam");
+  const [reportDetails, setReportDetails] = useState("");
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reporting, setReporting] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   async function load() {
@@ -75,10 +80,12 @@ export default function Feed() {
     (comments ?? []).forEach((c) => userIds.add(c.user_id));
 
     const { data: profiles } = userIds.size
-      ? await supabase.from("profiles").select("id,display_name").in("id", Array.from(userIds))
+      ? await supabase.from("profiles").select("id,display_name,avatar_url").in("id", Array.from(userIds))
       : { data: [] as any[] };
     const nameOf = (id: string) =>
       profiles?.find((p) => p.id === id)?.display_name ?? "Artist";
+    const avatarOf = (id: string) =>
+      profiles?.find((p) => p.id === id)?.avatar_url ?? null;
 
     const merged: Post[] = (rawPosts ?? []).map((p) => {
       const mediaUrls = getMediaUrls(p);
@@ -90,6 +97,7 @@ export default function Feed() {
         media_urls: mediaUrls,
         created_at: p.created_at,
         author: nameOf(p.user_id),
+        authorAvatar: avatarOf(p.user_id),
         likeCount: (likes ?? []).filter((l) => l.post_id === p.id).length,
         likedByMe: (likes ?? []).some((l) => l.post_id === p.id && l.user_id === user?.id),
         comments: (comments ?? [])
@@ -122,34 +130,39 @@ export default function Feed() {
   }
 
   function onMediaChosen(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    handleSelectedMedia(file);
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (files.length) handleSelectedMedia(files);
   }
 
-  function handleSelectedMedia(file: File) {
+  function handleSelectedMedia(files: File[]) {
     setMediaError(null);
-    const maxBytes = 30 * 1024 * 1024; // 30 MB
-    const allowed = /^(image|video)\//;
-    if (!allowed.test(file.type)) {
-      setMediaError("Format non supporté — utilisez une image ou une vidéo.");
+    const maxBytes = 30 * 1024 * 1024;
+    const maxFiles = 10;
+    const invalidFile = files.find((file) => !/^(image|video)\//.test(file.type));
+    if (invalidFile) {
+      setMediaError(`${invalidFile.name} : format non supporté.`);
       return;
     }
-    if (file.size > maxBytes) {
-      setMediaError("Fichier trop volumineux (max 30MB).");
+    const oversizedFile = files.find((file) => file.size > maxBytes);
+    if (oversizedFile) {
+      setMediaError(`${oversizedFile.name} dépasse la limite de 30 MB.`);
       return;
     }
-    setMediaFile(file);
-    setMediaPreview(URL.createObjectURL(file));
-    setMediaType(file.type);
+    if (mediaFiles.length + files.length > maxFiles) {
+      setMediaError(`Un post peut contenir au maximum ${maxFiles} médias.`);
+      return;
+    }
+    const previews = files.map((file) => ({ file, url: URL.createObjectURL(file) }));
+    setMediaFiles((current) => [...current, ...files]);
+    setMediaPreviews((current) => [...current, ...previews]);
   }
 
   function onDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault();
     setDragActive(false);
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
-    handleSelectedMedia(file);
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length) handleSelectedMedia(files);
   }
 
   function onDragOver(e: React.DragEvent<HTMLDivElement>) {
@@ -161,10 +174,11 @@ export default function Feed() {
     setDragActive(false);
   }
 
-  function removeMedia() {
-    setMediaFile(null);
-    setMediaPreview(null);
-    setMediaType(null);
+  function removeMedia(index: number) {
+    const preview = mediaPreviews[index];
+    if (preview) URL.revokeObjectURL(preview.url);
+    setMediaFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setMediaPreviews((current) => current.filter((_, itemIndex) => itemIndex !== index));
     setMediaError(null);
   }
 
@@ -199,34 +213,44 @@ export default function Feed() {
   }, [modalOpen, mediaPosts.length]);
 
   async function submitPost() {
-    if (!text.trim() && !mediaFile) return;
+    if (!text.trim() && mediaFiles.length === 0) return;
     setPosting(true);
-    const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
+    setMediaError(null);
+    try {
+      const supabase = createClient();
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+      if (authError || !user) throw new Error("Connectez-vous avant de publier.");
+
+      const mediaUrls = await Promise.all(
+        mediaFiles.map(async (file, index) => {
+          const path = `${user.id}/${Date.now()}-${index}-${Math.random().toString(36).slice(2)}-${file.name}`;
+          const { error } = await supabase.storage.from("post-images").upload(path, file);
+          if (error) throw new Error(`Échec de l'envoi de ${file.name} : ${error.message}`);
+          return supabase.storage.from("post-images").getPublicUrl(path).data.publicUrl;
+        })
+      );
+
+      const { error: insertError } = await supabase.from("posts").insert({
+        user_id: user.id,
+        body: text.trim(),
+        image_url: mediaUrls[0] ?? null,
+        media_urls: mediaUrls,
+      });
+      if (insertError) throw new Error(`Le post n'a pas été enregistré : ${insertError.message}`);
+
+      mediaPreviews.forEach(({ url }) => URL.revokeObjectURL(url));
+      setText("");
+      setMediaFiles([]);
+      setMediaPreviews([]);
+      await load();
+    } catch (error) {
+      setMediaError(error instanceof Error ? error.message : "La publication a échoué. Réessayez.");
+    } finally {
       setPosting(false);
-      return;
     }
-
-    let image_url: string | null = null;
-    if (mediaFile) {
-      const path = `${user.id}/${Date.now()}-${mediaFile.name}`;
-      const { error: uploadError } = await supabase.storage.from("post-images").upload(path, mediaFile);
-      if (!uploadError) {
-        image_url = supabase.storage.from("post-images").getPublicUrl(path).data.publicUrl;
-      }
-    }
-
-    await supabase.from("posts").insert({ user_id: user.id, body: text.trim(), image_url });
-
-    setText("");
-    setMediaFile(null);
-    setMediaPreview(null);
-    setMediaType(null);
-    setPosting(false);
-    load();
   }
 
   async function toggleLike(post: Post) {
@@ -263,6 +287,38 @@ export default function Feed() {
     load();
   }
 
+  async function deletePost(post: Post) {
+    if (!myId || post.user_id !== myId || !window.confirm("Supprimer cette publication ?")) return;
+    const supabase = createClient();
+    const { error } = await supabase.from("posts").delete().eq("id", post.id).eq("user_id", myId);
+    if (error) {
+      setMediaError(`Suppression impossible : ${error.message}`);
+      return;
+    }
+    setPosts((current) => current.filter((item) => item.id !== post.id));
+  }
+
+  async function submitReport() {
+    if (!reportPostId || !myId) return;
+    setReporting(true);
+    setReportError(null);
+    const supabase = createClient();
+    const { error } = await supabase.from("post_reports").insert({
+      post_id: reportPostId,
+      reporter_id: myId,
+      reason: reportReason,
+      details: reportDetails.trim() || null,
+    });
+    setReporting(false);
+    if (error) {
+      setReportError(error.code === "23505" ? "Vous avez déjà signalé cette publication." : error.message);
+      return;
+    }
+    setReportPostId(null);
+    setReportDetails("");
+    setReportError(null);
+  }
+
   function isVideoUrl(url: string | null | undefined) {
     return !!url && /\.(mp4|webm|ogg|mov)(\?|$)/i.test(url);
   }
@@ -296,17 +352,25 @@ export default function Feed() {
           className="w-full resize-none bg-transparent text-sm text-molla-black outline-none placeholder:text-molla-sub"
         />
 
-        {mediaPreview && mediaType?.startsWith("video/") && (
-          <video src={mediaPreview} controls className="mt-2.5 block h-48 w-full rounded-2xl object-cover mx-auto" />
-        )}
-        {mediaPreview && !mediaType?.startsWith("video/") && (
-          <img src={mediaPreview} alt="" className="mt-2.5 block h-48 w-full rounded-2xl object-cover mx-auto" />
-        )}
-
-        {mediaFile && (
-          <div className="mt-2 flex items-center justify-between rounded-full bg-molla-black/5 px-2.5 py-1.5 text-[11px] text-molla-sub">
-            <span className="truncate pr-2">{mediaFile.name}</span>
-            <button onClick={removeMedia} className="text-molla-sub">✖</button>
+        {mediaPreviews.length > 0 && (
+          <div className="mt-3 flex snap-x gap-2 overflow-x-auto pb-1">
+            {mediaPreviews.map(({ file, url }, index) => (
+              <div key={`${file.name}-${index}`} className="relative h-36 w-28 flex-none overflow-hidden rounded-xl bg-molla-black">
+                {file.type.startsWith("video/") ? (
+                  <video src={url} className="h-full w-full object-cover" />
+                ) : (
+                  <img src={url} alt={file.name} className="h-full w-full object-cover" />
+                )}
+                <button
+                  type="button"
+                  onClick={() => removeMedia(index)}
+                  aria-label={`Supprimer ${file.name}`}
+                  className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/70 text-sm text-white"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -319,10 +383,10 @@ export default function Feed() {
             </button>
             <span className="text-[10px] uppercase tracking-[0.15em] text-molla-sub">Media</span>
           </div>
-          <input ref={fileInput} type="file" accept="image/*,video/*" className="hidden" onChange={onMediaChosen} />
+          <input ref={fileInput} type="file" accept="image/*,video/*" multiple className="hidden" onChange={onMediaChosen} />
           <button
             onClick={submitPost}
-            disabled={posting || (!text.trim() && !mediaFile) || !!mediaError}
+            disabled={posting || (!text.trim() && mediaFiles.length === 0)}
             className="rounded-full bg-molla-yellow px-4 py-2 text-xs font-bold text-molla-black disabled:opacity-40"
           >
             {posting ? "Posting…" : "Post"}
@@ -339,13 +403,30 @@ export default function Feed() {
         {posts.map((post) => (
           <article key={post.id} className="mx-4 overflow-hidden rounded-[28px] border border-molla-line bg-white shadow-[0_14px_28px_rgba(11,13,16,0.05)]">
             <div className="flex items-center gap-2.5 px-3 pt-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-molla-black text-xs font-bold text-white">
-                {post.author.charAt(0).toUpperCase()}
+              <div className="flex h-9 w-9 flex-none items-center justify-center overflow-hidden rounded-full bg-molla-black text-xs font-bold text-white">
+                {post.authorAvatar ? (
+                  <img src={post.authorAvatar} alt="" className="h-full w-full object-cover" />
+                ) : post.author.charAt(0).toUpperCase()}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-extrabold">{post.author}</p>
                 <p className="text-[11px] text-molla-sub">{timeAgo(post.created_at)}</p>
               </div>
+              {post.user_id === myId ? (
+                <button onClick={() => deletePost(post)} className="px-2 py-1 text-xs font-semibold text-red-600">
+                  Delete
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    setReportPostId(post.id);
+                    setReportError(null);
+                  }}
+                  className="px-2 py-1 text-xs font-semibold text-molla-sub"
+                >
+                  Report
+                </button>
+              )}
             </div>
 
             {post.body && <p className="px-3 pt-2 text-sm leading-relaxed text-molla-black">{post.body}</p>}
@@ -424,6 +505,47 @@ export default function Feed() {
           </article>
         ))}
       </div>
+
+      {reportPostId && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-3 sm:items-center">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitReport();
+            }}
+            className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-extrabold">Report publication</h2>
+              <button type="button" onClick={() => setReportPostId(null)} aria-label="Close" className="text-xl text-molla-sub">×</button>
+            </div>
+            <label className="mt-4 block text-sm font-semibold" htmlFor="report-reason">Reason</label>
+            <select
+              id="report-reason"
+              value={reportReason}
+              onChange={(event) => setReportReason(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-molla-line bg-white px-3 py-2 text-sm"
+            >
+              <option value="spam">Spam</option>
+              <option value="harassment">Harassment</option>
+              <option value="inappropriate">Inappropriate content</option>
+              <option value="other">Other</option>
+            </select>
+            <label className="mt-3 block text-sm font-semibold" htmlFor="report-details">Details (optional)</label>
+            <textarea
+              id="report-details"
+              value={reportDetails}
+              onChange={(event) => setReportDetails(event.target.value.slice(0, 500))}
+              rows={3}
+              className="mt-1 w-full resize-none rounded-xl border border-molla-line px-3 py-2 text-sm"
+            />
+            {reportError && <p role="alert" className="mt-2 text-sm text-red-600">{reportError}</p>}
+            <button type="submit" disabled={reporting} className="mt-4 w-full rounded-full bg-molla-black px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">
+              {reporting ? "Sending…" : "Send report"}
+            </button>
+          </form>
+        </div>
+      )}
 
       {/* Fullscreen viewer */}
       {modalOpen && mediaPosts.length > 0 && (() => {
