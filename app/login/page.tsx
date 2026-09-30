@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { trackEvent } from "@/lib/analytics/trackEvent";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -54,3 +55,8 @@ export default function Login() {
     </div>
   );
 }
+
+// après création de compte réussie
+await trackEvent("signup", {
+  source: "magic_link",
+});
