@@ -28,28 +28,127 @@ export async function GET() {
     const {
       data: usersData,
       error: usersError,
-    } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    } = await admin.auth.admin.listUsers({
+      page: 1,
+      perPage: 1000,
+    });
 
     if (usersError) throw usersError;
 
+    const users = usersData.users;
+    const now = Date.now();
+
+    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+    const sixtyDaysAgo = now - 60 * 24 * 60 * 60 * 1000;
+
+    const new7 = users.filter(
+      (user) =>
+        new Date(user.created_at).getTime() >= sevenDaysAgo
+    ).length;
+
+    const verified = users.filter(
+      (user) => Boolean(user.email_confirmed_at)
+    ).length;
+
+    const activeUsers = new Set<string>();
+
     const { data: events, error: eventsError } = await admin
       .from("analytics_events")
-      .select("event_name, created_at");
+      .select("user_id, event_name, created_at");
 
     if (eventsError) throw eventsError;
 
-    const summary = events?.reduce<Record<string, number>>((acc, item) => {
-      acc[item.event_name] = (acc[item.event_name] ?? 0) + 1;
-      return acc;
-    }, {}) ?? {};
+    for (const event of events ?? []) {
+      if (!event.user_id) continue;
+
+      activeUsers.add(event.user_id);
+    }
+
+    const active7Users = new Set<string>();
+    const active30Users = new Set<string>();
+
+    for (const event of events ?? []) {
+      if (!event.user_id) continue;
+
+      const timestamp = new Date(event.created_at).getTime();
+
+      if (timestamp >= sevenDaysAgo) {
+        active7Users.add(event.user_id);
+      }
+
+      if (timestamp >= thirtyDaysAgo) {
+        active30Users.add(event.user_id);
+      }
+    }
+
+    const current30 = users.filter(
+      (user) =>
+        new Date(user.created_at).getTime() >= thirtyDaysAgo
+    ).length;
+
+    const previous30 = users.filter((user) => {
+      const createdAt = new Date(user.created_at).getTime();
+
+      return createdAt >= sixtyDaysAgo && createdAt < thirtyDaysAgo;
+    }).length;
+
+    const growth =
+      previous30 === 0
+        ? current30 > 0
+          ? 100
+          : 0
+        : Math.round(
+            ((current30 - previous30) / previous30) * 100
+          );
+
+    const dailyMap: Record<string, number> = {};
+
+    for (let i = 29; i >= 0; i--) {
+      const date = new Date(
+        now - i * 24 * 60 * 60 * 1000
+      )
+        .toISOString()
+        .slice(0, 10);
+
+      dailyMap[date] = 0;
+    }
+
+    for (const user of users) {
+      const date = new Date(user.created_at)
+        .toISOString()
+        .slice(0, 10);
+
+      if (date in dailyMap) {
+        dailyMap[date]++;
+      }
+    }
+
+    const daily = Object.entries(dailyMap).map(
+      ([date, count]) => ({
+        date,
+        count,
+      })
+    );
 
     return NextResponse.json({
-      users: usersData.users.length,
-      events: summary,
-      totalEvents: events?.length ?? 0,
+      total: users.length,
+      new7,
+      active7: active7Users.size,
+      active30: active30Users.size,
+      verified,
+      verificationRate:
+        users.length > 0
+          ? Math.round((verified / users.length) * 100)
+          : 0,
+      current30,
+      previous30,
+      growth,
+      daily,
     });
   } catch (error) {
     console.error("Analytics error:", error);
+
     return NextResponse.json(
       { error: "Could not load analytics." },
       { status: 500 }
