@@ -28,39 +28,3 @@ export async function trackEvent(
 
   return { ok: true };
 }
-
-// après création de compte réussie
-await trackEvent("signup", {
-  source: "magic_link",
-});
-
-// après sauvegarde du profil
-await trackEvent("profile_completed", {
-  has_avatar: Boolean(profile.avatar_url),
-  city: profile.location || null,
-  genres: profile.genres?.length ?? 0,
-});
-
-// après création d'un projet
-await trackEvent("project_created", {
-  project_type: project.type,
-  source: "dashboard",
-});
-
-// après publication d'un post
-await trackEvent("post_created", {
-  media_count: mediaUrls.length,
-  has_text: Boolean(content.trim()),
-});
-
-// quand le focus démarre
-await trackEvent("focus_started", {
-  duration: 25,
-  mode: "deep_work",
-});
-
-// quand l'IA est utilisée
-await trackEvent("ai_used", {
-  feature: "content_generation",
-  source: "composer",
-});
