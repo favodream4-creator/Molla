@@ -1,222 +1,115 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type Analytics = {
   total: number;
   new7: number;
   active7: number;
   active30: number;
-  verified: number;
   verificationRate: number;
-  current30: number;
-  previous30: number;
   growth: number;
-  daily: {
-    date: string;
-    count: number;
-  }[];
+  daily: { date: string; count: number }[];
 };
 
 export default function AdminPage() {
   const [data, setData] = useState<Analytics | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  async function loadAnalytics() {
+  const loadAnalytics = useCallback(async () => {
+    setLoading(true);
+    setError("");
+
     try {
-      setLoading(true);
-      setError("");
-
       const response = await fetch("/api/admin/analytics", {
         cache: "no-store",
       });
+      const result = await response.json();
 
       if (!response.ok) {
-        if (response.status === 401) {
-          throw new Error("You must be signed in.");
-        }
-        if (response.status === 403) {
-          throw new Error("You don't have access to Molla Analytics.");
-        }
-        throw new Error("Could not load analytics.");
+        throw new Error(result.error ?? "Impossible de charger les statistiques.");
       }
 
-      const result = await response.json();
-      setData(result);
+      setData(result as Analytics);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not load analytics."
-      );
+      setError(err instanceof Error ? err.message : "Une erreur est survenue.");
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void loadAnalytics();
-  }, []);
+  }, [loadAnalytics]);
 
-  if (loading) {
-    return (
-      <main className="min-h-screen bg-[#f5f5f3] px-5 py-10">
-        <div className="mx-auto max-w-5xl">
-          <p className="text-sm text-[#666]">Loading Molla Analytics…</p>
-        </div>
-      </main>
-    );
-  }
+  const stats = data
+    ? [
+        ["Utilisateurs", data.total],
+        ["Nouveaux · 7 jours", data.new7],
+        ["Actifs · 7 jours", data.active7],
+        ["Actifs · 30 jours", data.active30],
+        ["Comptes vérifiés", `${data.verificationRate}%`],
+        ["Croissance · 30 jours", `${data.growth}%`],
+      ]
+    : [];
 
-  if (error) {
-    return (
-      <main className="min-h-screen bg-[#f5f5f3] px-5 py-10">
-        <div className="mx-auto max-w-5xl">
-          <h1 className="text-2xl font-extrabold text-[#111]">
-            Molla Analytics
-          </h1>
-
-          <div className="mt-6 rounded-2xl border border-[#eae7e2] bg-white p-5">
-            <p className="text-sm text-red-600">{error}</p>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  if (!data) return null;
-
-  const max = Math.max(...data.daily.map((item) => item.count), 1);
+  const maxDaily = Math.max(1, ...(data?.daily.map((day) => day.count) ?? []));
 
   return (
-    <main className="min-h-screen bg-[#f5f5f3] px-5 py-8 pb-20">
-      <div className="mx-auto max-w-5xl">
-        <div className="flex items-center justify-between">
+    <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
+      <div className="mx-auto max-w-6xl">
+        <header className="mb-8 flex items-center justify-between">
           <div>
-            <p className="text-[11px] font-extrabold uppercase tracking-[0.2em] text-[#6a6a6a]">
-              Admin
-            </p>
-            <h1 className="mt-1 text-3xl font-extrabold text-[#111]">
-              Molla Analytics
-            </h1>
+            <p className="text-sm text-indigo-400">Administration</p>
+            <h1 className="mt-1 text-3xl font-bold">Analytics</h1>
           </div>
-
           <button
             onClick={() => void loadAnalytics()}
-            className="rounded-full border border-[#eae7e2] bg-white px-4 py-2 text-sm font-bold text-[#111]"
+            disabled={loading}
+            className="rounded-lg border border-slate-700 px-4 py-2 hover:bg-slate-800 disabled:opacity-50"
           >
-            Refresh
+            {loading ? "Chargement…" : "Actualiser"}
           </button>
-        </div>
+        </header>
 
-        <section className="mt-6 rounded-3xl border border-[#eae7e2] bg-white p-6">
-          <p className="text-sm text-[#6a6a6a]">Utilisateurs inscrits</p>
-          <div className="mt-1 text-6xl font-extrabold tracking-tight text-[#111]">
-            {data.total.toLocaleString("fr-FR")}
-          </div>
-        </section>
+        {error && <p className="mb-6 text-red-400">{error}</p>}
+        {loading && !data && <p className="text-slate-400">Chargement…</p>}
 
-        <section className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-3xl border border-[#eae7e2] bg-[#eae7e2] md:grid-cols-4">
-          <Stat value={data.new7} label="Nouveaux · 7 jours" />
-          <Stat value={data.active7} label="Actifs · 7 jours" />
-          <Stat value={data.active30} label="Actifs · 30 jours" />
-          <Stat value={`${data.verificationRate}%`} label="Emails vérifiés" />
-        </section>
+        {data && (
+          <>
+            <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {stats.map(([label, value]) => (
+                <article
+                  key={label}
+                  className="rounded-xl border border-slate-800 bg-slate-900 p-5"
+                >
+                  <p className="text-sm text-slate-400">{label}</p>
+                  <p className="mt-3 text-3xl font-semibold">{value}</p>
+                </article>
+              ))}
+            </section>
 
-        <section className="mt-4 grid gap-4 md:grid-cols-2">
-          <div className="rounded-3xl border border-[#eae7e2] bg-white p-6">
-            <p className="text-sm font-bold text-[#111]">
-              Croissance des inscriptions
-            </p>
-
-            <div
-              className={`mt-2 text-5xl font-extrabold ${
-                data.growth >= 0 ? "text-green-600" : "text-red-600"
-              }`}
-            >
-              {data.growth >= 0 ? "+" : ""}
-              {data.growth}%
-            </div>
-
-            <p className="mt-2 text-sm text-[#6a6a6a]">
-              {data.current30} inscriptions sur les 30 derniers jours contre{" "}
-              {data.previous30} les 30 jours précédents.
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-[#eae7e2] bg-white p-6">
-            <p className="text-sm font-bold text-[#111]">
-              Utilisateurs vérifiés
-            </p>
-
-            <div className="mt-4 h-4 overflow-hidden rounded-full bg-[#f2efe9]">
-              <div
-                className="h-full rounded-full bg-[#0f172a]"
-                style={{ width: `${data.verificationRate}%` }}
-              />
-            </div>
-
-            <p className="mt-3 text-sm text-[#6a6a6a]">
-              {data.verified} utilisateurs vérifiés sur {data.total}.
-            </p>
-          </div>
-        </section>
-
-        <section className="mt-4 rounded-3xl border border-[#eae7e2] bg-white p-6">
-          <div>
-            <p className="text-lg font-extrabold text-[#111]">
-              Nouvelles inscriptions
-            </p>
-            <p className="text-sm text-[#6a6a6a]">30 derniers jours</p>
-          </div>
-
-          <div className="mt-8 flex h-64 items-end gap-1">
-            {data.daily.map((item) => (
-              <div
-                key={item.date}
-                className="group flex h-full flex-1 items-end"
-                title={`${item.date}: ${item.count}`}
-              >
-                <div
-                  className="w-full rounded-t-md bg-[#111827] transition-opacity group-hover:opacity-70"
-                  style={{
-                    height: `${Math.max(
-                      (item.count / max) * 100,
-                      item.count > 0 ? 4 : 0
-                    )}%`,
-                  }}
-                />
+            <section className="mt-8 rounded-xl border border-slate-800 bg-slate-900 p-6">
+              <h2 className="mb-6 text-lg font-semibold">
+                Inscriptions · 30 derniers jours
+              </h2>
+              <div className="flex h-48 items-end gap-1">
+                {data.daily.map((day) => (
+                  <div
+                    key={day.date}
+                    title={`${day.date} : ${day.count}`}
+                    className="min-w-0 flex-1 rounded-t bg-indigo-500"
+                    style={{
+                      height: `${Math.max(4, (day.count / maxDaily) * 100)}%`,
+                    }}
+                  />
+                ))}
               </div>
-            ))}
-          </div>
-
-          <div className="mt-3 flex justify-between text-[11px] text-[#6a6a6a]">
-            <span>{data.daily[0]?.date}</span>
-            <span>{data.daily[data.daily.length - 1]?.date}</span>
-          </div>
-        </section>
+            </section>
+          </>
+        )}
       </div>
     </main>
-  );
-}
-
-function Stat({
-  value,
-  label,
-}: {
-  value: number | string;
-  label: string;
-}) {
-  return (
-    <div className="bg-white p-5">
-      <div className="text-3xl font-extrabold text-[#111]">
-        {typeof value === "number"
-          ? value.toLocaleString("fr-FR")
-          : value}
-      </div>
-
-      <div className="mt-1 text-xs font-semibold text-[#6a6a6a]">
-        {label}
-      </div>
-    </div>
   );
 }
