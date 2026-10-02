@@ -23,138 +23,313 @@ type ArtistProfileData = {
   social_links: SocialLinks | null;
 };
 
-const socialMeta: { key: keyof SocialLinks; label: string; icon: string }[] = [
+const socialMeta: {
+  key: keyof SocialLinks;
+  label: string;
+  icon: string;
+}[] = [
   { key: "instagram", label: "Instagram", icon: "📸" },
   { key: "spotify", label: "Spotify", icon: "🎧" },
   { key: "tiktok", label: "TikTok", icon: "🎵" },
   { key: "website", label: "Website", icon: "🔗" },
 ];
 
-export default function ArtistProfile({ artistId }: { artistId: string }) {
+export default function ArtistProfile({
+  artistId,
+}: {
+  artistId: string;
+}) {
   const router = useRouter();
+
   const [me, setMe] = useState<string | null>(null);
   const [artist, setArtist] = useState<ArtistProfileData | null>(null);
+
   const [loading, setLoading] = useState(true);
+  const [followLoading, setFollowLoading] = useState(false);
+  const [connectLoading, setConnectLoading] = useState(false);
+
   const [followerCount, setFollowerCount] = useState(0);
+  const [followingCount, setFollowingCount] = useState(0);
+
   const [following, setFollowing] = useState(false);
   const [connectSent, setConnectSent] = useState(false);
 
   useEffect(() => {
-    (async () => {
+    let mounted = true;
+
+    async function loadProfile() {
       const supabase = createClient();
+
+      setLoading(true);
+
       const {
         data: { user },
       } = await supabase.auth.getUser();
+
+      if (!mounted) return;
+
       setMe(user?.id ?? null);
 
-      // Viewing your own profile? Send them to the editable Profile screen instead.
+      // If viewing your own profile, use the editable profile page.
       if (user?.id === artistId) {
         router.replace("/profile");
         return;
       }
 
-      const { data: profile } = await supabase
+      const { data: profile, error: profileError } = await supabase
         .from("profiles")
-        .select("id,display_name,avatar_url,bio,location,genres,looking_for,social_links")
+        .select(
+          "id,display_name,avatar_url,bio,location,genres,looking_for,social_links"
+        )
         .eq("id", artistId)
         .maybeSingle();
+
+      if (!mounted) return;
+
+      if (profileError) {
+        console.error("Profile error:", profileError);
+      }
+
       setArtist(profile as ArtistProfileData | null);
 
-      const { count } = await supabase
+      // Followers
+      const { count: followers } = await supabase
         .from("follows")
-        .select("id", { count: "exact", head: true })
+        .select("id", {
+          count: "exact",
+          head: true,
+        })
         .eq("following_id", artistId);
-      setFollowerCount(count ?? 0);
+
+      if (!mounted) return;
+
+      setFollowerCount(followers ?? 0);
+
+      // Following
+      const { count: followingTotal } = await supabase
+        .from("follows")
+        .select("id", {
+          count: "exact",
+          head: true,
+        })
+        .eq("follower_id", artistId);
+
+      if (!mounted) return;
+
+      setFollowingCount(followingTotal ?? 0);
 
       if (user) {
+        // Does current user follow this artist?
         const { data: myFollow } = await supabase
           .from("follows")
           .select("id")
           .eq("follower_id", user.id)
           .eq("following_id", artistId)
           .maybeSingle();
+
+        if (!mounted) return;
+
         setFollowing(!!myFollow);
 
+        // Existing connection request
         const { data: myRequest } = await supabase
           .from("artist_connection_requests")
           .select("id")
           .eq("requester_id", user.id)
           .eq("target_id", artistId)
           .maybeSingle();
+
+        if (!mounted) return;
+
         setConnectSent(!!myRequest);
       }
 
       setLoading(false);
-    })();
+    }
+
+    loadProfile();
+
+    return () => {
+      mounted = false;
+    };
   }, [artistId, router]);
 
   async function toggleFollow() {
-    if (!me) return;
+    if (!me || followLoading) return;
+
     const supabase = createClient();
-    if (following) {
-      setFollowing(false);
-      setFollowerCount((c) => Math.max(0, c - 1));
-      await supabase.from("follows").delete().eq("follower_id", me).eq("following_id", artistId);
+
+    const previousFollowing = following;
+    const previousCount = followerCount;
+
+    const nextFollowing = !previousFollowing;
+
+    setFollowLoading(true);
+
+    // Optimistic UI
+    setFollowing(nextFollowing);
+
+    setFollowerCount((count) =>
+      nextFollowing ? count + 1 : Math.max(0, count - 1)
+    );
+
+    if (nextFollowing) {
+      const { error } = await supabase.from("follows").insert({
+        follower_id: me,
+        following_id: artistId,
+      });
+
+      if (error) {
+        console.error("Follow error:", error);
+
+        // Rollback UI
+        setFollowing(previousFollowing);
+        setFollowerCount(previousCount);
+      }
     } else {
-      setFollowing(true);
-      setFollowerCount((c) => c + 1);
-      await supabase.from("follows").upsert({ follower_id: me, following_id: artistId });
+      const { error } = await supabase
+        .from("follows")
+        .delete()
+        .eq("follower_id", me)
+        .eq("following_id", artistId);
+
+      if (error) {
+        console.error("Unfollow error:", error);
+
+        // Rollback UI
+        setFollowing(previousFollowing);
+        setFollowerCount(previousCount);
+      }
     }
+
+    setFollowLoading(false);
   }
 
   async function sendConnect() {
-    if (!me || connectSent) return;
+    if (!me || connectSent || connectLoading) return;
+
     const supabase = createClient();
-    setConnectSent(true);
-    await supabase
+
+    setConnectLoading(true);
+
+    const { error } = await supabase
       .from("artist_connection_requests")
-      .upsert({ requester_id: me, target_id: artistId });
+      .upsert(
+        {
+          requester_id: me,
+          target_id: artistId,
+        },
+        {
+          onConflict: "requester_id,target_id",
+        }
+      );
+
+    if (error) {
+      console.error("Connection request error:", error);
+    } else {
+      setConnectSent(true);
+    }
+
+    setConnectLoading(false);
   }
 
   if (loading) {
-    return <p className="px-5 pt-8 text-sm text-molla-sub">Loading…</p>;
+    return (
+      <div className="px-5 pt-8">
+        <p className="text-sm text-molla-sub">Loading…</p>
+      </div>
+    );
   }
 
   if (!artist) {
     return (
       <div className="px-5 pt-8">
-        <button onClick={() => router.back()} className="text-sm font-bold text-molla-sub mb-4">
+        <button
+          onClick={() => router.back()}
+          className="mb-4 text-sm font-bold text-molla-sub"
+        >
           ← Back
         </button>
-        <p className="text-sm text-molla-sub">This artist couldn&rsquo;t be found.</p>
+
+        <p className="text-sm text-molla-sub">
+          This artist couldn&rsquo;t be found.
+        </p>
       </div>
     );
   }
 
   const links = artist.social_links ?? {};
-  const activeLinks = socialMeta.filter((s) => links[s.key]);
+
+  const activeLinks = socialMeta.filter(
+    (social) => links[social.key]
+  );
 
   return (
-    <div className="pt-6 pb-10 px-5">
-      <button onClick={() => router.back()} className="text-sm font-bold text-molla-sub mb-4">
+    <div className="px-5 pb-10 pt-6">
+      {/* Back */}
+      <button
+        onClick={() => router.back()}
+        className="mb-4 text-sm font-bold text-molla-sub"
+      >
         ← Back
       </button>
 
+      {/* Artist Header */}
       <div className="text-center">
         <div className="mx-auto mb-3.5 flex h-[88px] w-[88px] items-center justify-center overflow-hidden rounded-full bg-molla-black text-2xl font-extrabold text-white">
           {artist.avatar_url ? (
-            <img src={artist.avatar_url} alt={artist.display_name} className="h-full w-full object-cover" />
+            <img
+              src={artist.avatar_url}
+              alt={artist.display_name}
+              className="h-full w-full object-cover"
+            />
           ) : (
             artist.display_name.charAt(0).toUpperCase()
           )}
         </div>
-        <h2 className="text-lg font-extrabold">{artist.display_name}</h2>
-        <p className="text-sm text-molla-sub mt-1">
-          Artist{artist.location ? ` · ${artist.location}` : ""}
-        </p>
-        <p className="text-sm text-molla-sub mt-1">
-          {followerCount} follower{followerCount === 1 ? "" : "s"}
+
+        <h2 className="text-lg font-extrabold">
+          {artist.display_name}
+        </h2>
+
+        <p className="mt-1 text-sm text-molla-sub">
+          Artist
+          {artist.location ? ` · ${artist.location}` : ""}
         </p>
 
+        {/* Social Stats */}
+        <div className="mt-4 flex items-center justify-center gap-8">
+          <div className="text-center">
+            <div className="text-base font-extrabold">
+              {followerCount}
+            </div>
+
+            <div className="text-xs text-molla-sub">
+              Followers
+            </div>
+          </div>
+
+          <div className="h-8 w-px bg-molla-line" />
+
+          <div className="text-center">
+            <div className="text-base font-extrabold">
+              {followingCount}
+            </div>
+
+            <div className="text-xs text-molla-sub">
+              Following
+            </div>
+          </div>
+        </div>
+
+        {/* Genres */}
         {!!artist.genres?.length && (
-          <div className="mt-2.5 space-x-1.5">
+          <div className="mt-3 flex flex-wrap justify-center gap-1.5">
             {artist.genres.map((tag) => (
-              <span key={tag} className="inline-block bg-molla-gray text-xs font-bold px-3 py-1.5 rounded-full">
+              <span
+                key={tag}
+                className="rounded-full bg-molla-gray px-3 py-1.5 text-xs font-bold"
+              >
                 {tag}
               </span>
             ))}
@@ -162,62 +337,96 @@ export default function ArtistProfile({ artistId }: { artistId: string }) {
         )}
       </div>
 
-      {artist.bio && <p className="text-sm text-molla-sub mt-4 leading-relaxed text-center">{artist.bio}</p>}
+      {/* Bio */}
+      {artist.bio && (
+        <p className="mt-4 text-center text-sm leading-relaxed text-molla-sub">
+          {artist.bio}
+        </p>
+      )}
 
+      {/* Social Links */}
       {activeLinks.length > 0 && (
-        <div className="flex justify-center gap-3 mt-4">
-          {activeLinks.map((s) => (
+        <div className="mt-4 flex justify-center gap-3">
+          {activeLinks.map((social) => (
             <a
-              key={s.key}
-              href={links[s.key]}
+              key={social.key}
+              href={links[social.key]}
               target="_blank"
               rel="noopener noreferrer"
-              className="w-10 h-10 rounded-full bg-molla-gray flex items-center justify-center text-lg"
-              title={s.label}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-molla-gray text-lg"
+              title={social.label}
+              aria-label={social.label}
             >
-              {s.icon}
+              {social.icon}
             </a>
           ))}
         </div>
       )}
 
-      <div className="flex gap-2.5 mt-6">
+      {/* Actions */}
+      <div className="mt-6 flex gap-2.5">
         <button
+          type="button"
           onClick={toggleFollow}
-          disabled={!me}
-          className={`flex-1 rounded-2xl py-3.5 font-bold text-sm ${
-            following ? "bg-molla-gray text-molla-sub" : "bg-molla-black text-white"
-          } disabled:opacity-50`}
+          disabled={!me || followLoading}
+          className={`flex-1 rounded-2xl py-3.5 text-sm font-bold transition ${
+            following
+              ? "bg-molla-gray text-molla-sub"
+              : "bg-molla-black text-white"
+          } disabled:cursor-not-allowed disabled:opacity-50`}
         >
-          {following ? "Following ✓" : "Follow"}
+          {followLoading
+            ? "..."
+            : following
+              ? "Following ✓"
+              : "Follow"}
         </button>
+
         <button
+          type="button"
           onClick={sendConnect}
-          disabled={!me || connectSent}
-          className={`flex-1 rounded-2xl py-3.5 font-bold text-sm ${
-            connectSent ? "bg-molla-gray text-molla-sub" : "bg-molla-blue text-white"
-          } disabled:opacity-50`}
+          disabled={!me || connectSent || connectLoading}
+          className={`flex-1 rounded-2xl py-3.5 text-sm font-bold transition ${
+            connectSent
+              ? "bg-molla-gray text-molla-sub"
+              : "bg-molla-blue text-white"
+          } disabled:cursor-not-allowed disabled:opacity-50`}
         >
-          {connectSent ? "Requested" : "Connect"}
+          {connectLoading
+            ? "..."
+            : connectSent
+              ? "Requested"
+              : "Connect"}
         </button>
       </div>
 
+      {/* Looking For */}
       {!!artist.looking_for?.length && (
         <>
-          <div className="text-xs font-extrabold text-molla-sub mt-7 mb-1">LOOKING FOR</div>
+          <div className="mb-1 mt-7 text-xs font-extrabold text-molla-sub">
+            LOOKING FOR
+          </div>
+
           <ul>
-            {artist.looking_for.map((s) => (
-              <li key={s} className="py-2.5 border-b border-molla-line text-sm font-semibold">
-                {s}
+            {artist.looking_for.map((item) => (
+              <li
+                key={item}
+                className="border-b border-molla-line py-2.5 text-sm font-semibold"
+              >
+                {item}
               </li>
             ))}
           </ul>
         </>
       )}
 
+      {/* Login CTA */}
       {!me && (
-        <p className="text-center text-xs text-molla-sub mt-5">
-          <Link href="/login" className="font-bold text-molla-blue">
+        <p className="mt-5 text-center text-xs text-molla-sub">
+          <Link
+            href="/login"
+            className="font-bold text-molla-blue"
+          >
             Sign in
           </Link>{" "}
           to follow or connect with {artist.display_name}.
