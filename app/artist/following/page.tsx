@@ -1,6 +1,6 @@
 import FollowList from "@/components/FollowList";
 
-export default function FollowersPage({
+export default function FollowingPage({
   params,
 }: {
   params: { id: string };
@@ -8,7 +8,7 @@ export default function FollowersPage({
   return (
     <FollowList
       userId={params.id}
-      mode="followers"
+      mode="following"
     />
   );
 }

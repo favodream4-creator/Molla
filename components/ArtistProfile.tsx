@@ -299,28 +299,34 @@ export default function ArtistProfile({
 
         {/* Social Stats */}
         <div className="mt-4 flex items-center justify-center gap-8">
-          <div className="text-center">
-            <div className="text-base font-extrabold">
-              {followerCount}
-            </div>
+  <Link
+    href={`/artist/${artistId}/followers`}
+    className="text-center transition-opacity hover:opacity-70"
+  >
+    <div className="text-base font-extrabold">
+      {followerCount}
+    </div>
 
-            <div className="text-xs text-molla-sub">
-              Followers
-            </div>
-          </div>
+    <div className="text-xs text-molla-sub">
+      Followers
+    </div>
+  </Link>
 
-          <div className="h-8 w-px bg-molla-line" />
+  <div className="h-8 w-px bg-molla-line" />
 
-          <div className="text-center">
-            <div className="text-base font-extrabold">
-              {followingCount}
-            </div>
+  <Link
+    href={`/artist/${artistId}/following`}
+    className="text-center transition-opacity hover:opacity-70"
+  >
+    <div className="text-base font-extrabold">
+      {followingCount}
+    </div>
 
-            <div className="text-xs text-molla-sub">
-              Following
-            </div>
-          </div>
-        </div>
+    <div className="text-xs text-molla-sub">
+      Following
+    </div>
+  </Link>
+</div>
 
         {/* Genres */}
         {!!artist.genres?.length && (
