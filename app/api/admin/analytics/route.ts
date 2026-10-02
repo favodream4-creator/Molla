@@ -131,6 +131,24 @@ export async function GET() {
       })
     );
 
+    const activityMap: Record<string, Set<string>> = {};
+
+    for (const date of Object.keys(dailyMap)) {
+      activityMap[date] = new Set<string>();
+    }
+
+    for (const event of events ?? []) {
+      if (!event.user_id) continue;
+
+      const date = new Date(event.created_at).toISOString().slice(0, 10);
+      if (date in activityMap) activityMap[date].add(event.user_id);
+    }
+
+    const activityDaily = Object.entries(activityMap).map(([date, users]) => ({
+      date,
+      count: users.size,
+    }));
+
     return NextResponse.json({
       total: users.length,
       new7,
@@ -145,6 +163,7 @@ export async function GET() {
       previous30,
       growth,
       daily,
+      activityDaily,
     });
   } catch (error) {
     console.error("Analytics error:", error);
